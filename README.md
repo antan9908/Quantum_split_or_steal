@@ -1,0 +1,72 @@
+# Quantum Split or Steal
+
+An interactive **Eisert–Wilkens–Lewenstein (EWL) quantum game** built with Qiskit and Streamlit. Choose **Split**, **Steal**, or **Quantum**, play against a random AI or a manually selected opponent, and see the exact outcome probabilities, circuit, and winnings for each round.
+
+## Game rules
+
+Choose a prize pool for each round. The classical Split or Steal payoff is:
+
+| Your move | Opponent's move | Your winnings | Opponent winnings |
+| --- | --- | ---: | ---: |
+| Split | Split | Half the prize | Half the prize |
+| Split | Steal | $0 | Full prize |
+| Steal | Split | Full prize | $0 |
+| Steal | Steal | $0 | $0 |
+
+The quantum option applies an EWL phase operation. The app calculates exact, noise-free probabilities using Qiskit's `Statevector`, then scales expected winnings by the selected prize pool.
+
+## Strategies and quantum model
+
+- **Split (S):** identity operation.
+- **Steal (T):** Pauli-X operation.
+- **Quantum (Q):** `diag(i, -i)`.
+- **Entangler:** `J = exp(i π/4 · X⊗X) = (I⊗I + iX⊗X)/√2`; the circuit applies `J†` before measurement.
+
+The displayed bitstrings use Alice–Bob order: `0` means Split and `1` means Steal. Qubit 0 is Alice and qubit 1 is Bob.
+
+With the implemented three-strategy set `{S, T, Q}`, `(Q, Q)` gives each player half the prize, and neither player can improve by switching alone to `S` or `T`. This Nash-equilibrium statement applies to the gates, measurement mapping, and payoff rules used here.
+
+## Features
+
+- Dark, neon-styled Streamlit interface.
+- Random AI opponent or manually selected opponent move.
+- Adjustable prize pool.
+- Exact outcome probabilities and expected winnings.
+- Matplotlib circuit rendering and Plotly outcome chart.
+- Session scoreboards, leaderboard, sortable/filterable round history, and reset control.
+
+## Project structure
+
+```text
+.
+├── app.py                 # Streamlit UI and session state
+├── quantum_engine.py      # EWL circuit, Statevector probabilities, payoffs
+├── requirements.txt       # Runtime dependencies
+├── .streamlit/config.toml # App theme defaults
+└── .gitignore             # Local environments, caches, and secrets
+```
+
+## Run locally
+
+Requires Python 3.10 or newer.
+
+```bash
+python -m venv .venv
+```
+
+Activate the environment, then install the dependencies and start Streamlit:
+
+```bash
+python -m pip install -r requirements.txt
+streamlit run app.py
+```
+
+On Windows PowerShell, activate the environment with:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+## Dependency compatibility
+
+The requirements keep Qiskit on the 1.x line and pair it with a compatible Qiskit Aer range. Streamlit, NumPy, Pandas, Matplotlib, and Plotly provide the interface and visualizations.

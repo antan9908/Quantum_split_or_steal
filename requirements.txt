@@ -1,0 +1,10 @@
+# Quantum circuit construction and local simulation (Qiskit 1.x)
+qiskit>=1.0,<2.0
+qiskit-aer>=0.14,<0.18
+
+# Streamlit interface and visualization
+streamlit>=1.50,<2.0
+numpy>=1.24,<3.0
+pandas>=1.5,<4.0
+matplotlib>=3.7,<4.0
+plotly>=5.18,<7.0
