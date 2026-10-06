@@ -322,49 +322,54 @@ with st.expander("🧠 Theory & Math — the EWL protocol", expanded=False):
 if st.session_state.game_history:
     latest = st.session_state.game_history[-1]
     st.markdown("## Latest round")
-    result_left, result_right = st.columns([1, 1.2])
-    with result_left:
-        st.markdown(
-            f"""
-            <div class="round-card">
-              <strong>Round {latest['Round']}</strong><br>
-              You played <strong>{STRATEGY_LABELS[latest['Your strategy']]}</strong><br>
-              {latest.get('Opponent mode', 'Opponent')} played <strong>{STRATEGY_LABELS[latest['Opponent strategy']]}</strong><br><br>
-              Prize pool: <strong>${latest['Prize pool']:.2f}</strong><br>
-              Your expected winnings: <strong>${latest['Your payoff']:.2f}</strong><br>
-              Opponent expected winnings: <strong>${latest['Opponent payoff']:.2f}</strong>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with result_right:
-        probabilities = latest["Outcome probabilities"]
-        outcomes = ["00", "01", "10", "11"]
-        probability_frame = pd.DataFrame(
+    st.markdown(
+        f"""
+        <div class="round-card">
+          <strong>Round {latest['Round']}</strong><br>
+          You played <strong>{STRATEGY_LABELS[latest['Your strategy']]}</strong><br>
+          {latest.get('Opponent mode', 'Opponent')} played <strong>{STRATEGY_LABELS[latest['Opponent strategy']]}</strong><br><br>
+          Prize pool: <strong>${latest['Prize pool']:.2f}</strong><br>
+          Your expected winnings: <strong>${latest['Your payoff']:.2f}</strong><br>
+          Opponent expected winnings: <strong>${latest['Opponent payoff']:.2f}</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Outcome probabilities across all rounds")
+    st.caption("Each line follows one measured outcome through the full game. Click a legend item to focus on that outcome.")
+    outcomes = ["00", "01", "10", "11"]
+    probability_history = pd.DataFrame(
+        [
             {
-                "Final state": [OUTCOME_LABELS[outcome] for outcome in outcomes],
-                "Probability": [probabilities.get(outcome, 0.0) for outcome in outcomes],
+                "Round": round_record["Round"],
+                "Final outcome": OUTCOME_LABELS[outcome],
+                "Probability": round_record["Outcome probabilities"].get(outcome, 0.0),
             }
-        )
-        figure = px.bar(
-            probability_frame,
-            x="Final state",
-            y="Probability",
-            text_auto=".1%",
-            color="Final state",
-            color_discrete_sequence=px.colors.qualitative.Prism,
-        )
-        figure.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#cbd5e1",
-            showlegend=False,
-            margin=dict(l=10, r=10, t=15, b=10),
-            yaxis=dict(range=[0, 1], tickformat=".0%", title="Probability"),
-            xaxis_title="Measured final state (Alice, Bob)",
-        )
-        st.plotly_chart(figure, width="stretch")
+            for round_record in st.session_state.game_history
+            for outcome in outcomes
+        ]
+    )
+    history_figure = px.line(
+        probability_history,
+        x="Round",
+        y="Probability",
+        color="Final outcome",
+        markers=True,
+        color_discrete_sequence=px.colors.qualitative.Prism,
+        hover_data={"Probability": ":.1%"},
+    )
+    history_figure.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#cbd5e1",
+        margin=dict(l=10, r=10, t=15, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        xaxis=dict(title="Round", dtick=1),
+        yaxis=dict(range=[0, 1], tickformat=".0%", title="Probability"),
+    )
+    st.plotly_chart(history_figure, width="stretch")
 
     st.markdown("### Quantum circuit")
     circuit = build_ewl_circuit(latest["Your strategy"], latest["Opponent strategy"])

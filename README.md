@@ -32,6 +32,7 @@ With the implemented three-strategy set `{S, T, Q}`, `(Q, Q)` gives each player 
 - Random AI opponent or manually selected opponent move.
 - Adjustable prize pool.
 - Exact outcome probabilities and expected winnings.
+- Full-session Plotly timeline showing all four outcome probabilities round by round.
 - Matplotlib circuit rendering and Plotly outcome chart.
 - Session scoreboards, leaderboard, sortable/filterable round history, and reset control.
 
