@@ -15,7 +15,7 @@ Choose a prize pool for each round. The classical Split or Steal payoff is:
 | Steal | Split | Full prize | $0 |
 | Steal | Steal | $0 | $0 |
 
-The quantum option applies an EWL phase operation. The app calculates exact, noise-free probabilities using Qiskit's `Statevector`, then scales expected winnings by the selected prize pool.
+The quantum option applies an EWL phase operation. The app calculates exact, noise-free probabilities using Qiskit's `Statevector`, then calculates payouts from the selected prize pool. This project also has a custom rule: when one player chooses **Quantum (Q)** and the other chooses **Split (S)**, each receives half the prize, regardless of the measured outcome. This applies in either player order.
 
 ## Strategies and quantum model
 
@@ -24,16 +24,16 @@ The quantum option applies an EWL phase operation. The app calculates exact, noi
 - **Quantum (Q):** `diag(i, -i)`.
 - **Entangler:** `J = exp(i π/4 · X⊗X) = (I⊗I + iX⊗X)/√2`; the circuit applies `J†` before measurement.
 
-The displayed bitstrings use Alice–Bob order: `0` means Split and `1` means Steal. Qubit 0 is Alice and qubit 1 is Bob.
+The displayed bitstrings use Alice–Bob order: `0` means Split and `1` means Steal. Qubit 0 is Alice and qubit 1 is Bob. Outcome charts always show the raw EWL measurement probabilities. The Q/S custom payout is applied separately, so its awarded split can differ from the bitstring shown by the circuit.
 
-With the implemented three-strategy set `{S, T, Q}`, `(Q, Q)` gives each player half the prize, and neither player can improve by switching alone to `S` or `T`. This Nash-equilibrium statement applies to the gates, measurement mapping, and payoff rules used here.
+The custom Q/S payout is a game-design rule, not a consequence of the EWL protocol. Strategy optimality and equilibrium claims depend on the full payout rules; this app does not assert that Q is universally optimal.
 
 ## Features
 
 - Dark, neon-styled Streamlit interface.
 - Random AI opponent or manually selected opponent move.
 - Adjustable prize pool.
-- Exact outcome probabilities and expected winnings.
+- Exact outcome probabilities, expected winnings, and the custom Q/S payout rule.
 - Full-session Plotly timeline showing all four outcome probabilities round by round.
 - Matplotlib circuit rendering and Plotly outcome chart.
 - Session scoreboards, leaderboard, sortable/filterable round history, and reset control.

@@ -29,7 +29,7 @@ OUTCOME_LABELS = {
     "10": "∣10⟩  Steal / Split",
     "11": "∣11⟩  Steal / Steal",
 }
-GAME_RULES_VERSION = 2
+GAME_RULES_VERSION = 3
 
 st.set_page_config(
     page_title="Quantum Split or Steal",
@@ -204,6 +204,8 @@ def play_round(
             "Opponent strategy": opponent_strategy,
             "Your payoff": player_payoff,
             "Opponent payoff": opponent_payoff,
+            "Payout rule": result["payout_rule"],
+            "Payout note": result["payout_note"],
             "Outcome probabilities": all_outcomes,
         }
     )
@@ -232,8 +234,11 @@ with st.sidebar:
         choices are applied and the qubits are disentangled before measurement.
         The measured bits map to the four Split / Steal outcomes in the table.
 
-        Payoffs are calculated from the exact, noise-free outcome
-        probabilities, then multiplied by the selected prize pool.
+        Normally, payoffs follow the exact, noise-free measured outcomes and
+        the selected prize pool. **Custom Quantum–Split rule:** if one player
+        chooses Q and the other chooses S, each receives half the prize,
+        regardless of the measured bitstring. The probability chart continues
+        to show the raw EWL measurement.
         """
     )
     st.divider()
@@ -306,21 +311,23 @@ with st.expander("🧠 Theory & Math — the EWL protocol", expanded=False):
     st.latex(r"p_{ab}=|\langle ab|\psi_f\rangle|^2,\qquad \mathbb{E}[u_A]=\sum_{a,b}p_{ab}u_A(ab)")
     st.markdown(
         "For this version, **S (Split) = I**, **T (Steal) = X**, and "
-        "**Q = diag(i, −i)**. The outcome payoff matrix is a share of the pool "
+        "**Q = diag(i, −i)**. The standard outcome payoff matrix is a share of the pool "
         r"\(P\): \(u(00)=(P/2,P/2)\), \(u(01)=(0,P)\), "
         r"\(u(10)=(P,0)\), and \(u(11)=(0,0)\)."
     )
     st.markdown(
-        "With the three available choices **S, T, and Q**, (Q, Q) yields the "
-        r"Split / Split outcome, so each player receives \(P/2\). If either player "
-        "changes unilaterally to S or T while the other keeps Q, that player's "
-        "expected winnings fall to zero. Therefore Q/Q is a Nash equilibrium "
-        "within this implemented strategy set; the claim is specific to these "
-        "gates, measurement mapping, and payoff rules."
+        "**Custom payout rule:** when the strategies are Q/S or S/Q, each player "
+        r"receives \(P/2\), regardless of the measured bitstring. This house rule "
+        "changes the payout calculation only; it does not alter the EWL circuit "
+        "or its outcome probabilities. The rule is a game-design choice rather "
+        "than a consequence of the quantum protocol, so this app does not claim "
+        "that Q is universally optimal or that the custom game has a particular "
+        "Nash equilibrium."
     )
 
 if st.session_state.game_history:
     latest = st.session_state.game_history[-1]
+    winnings_label = "winnings" if latest.get("Payout note") else "expected winnings"
     st.markdown("## Latest round")
     st.markdown(
         f"""
@@ -329,15 +336,19 @@ if st.session_state.game_history:
           You played <strong>{STRATEGY_LABELS[latest['Your strategy']]}</strong><br>
           {latest.get('Opponent mode', 'Opponent')} played <strong>{STRATEGY_LABELS[latest['Opponent strategy']]}</strong><br><br>
           Prize pool: <strong>${latest['Prize pool']:.2f}</strong><br>
-          Your expected winnings: <strong>${latest['Your payoff']:.2f}</strong><br>
-          Opponent expected winnings: <strong>${latest['Opponent payoff']:.2f}</strong>
+          Your {winnings_label}: <strong>${latest['Your payoff']:.2f}</strong><br>
+          Opponent {winnings_label}: <strong>${latest['Opponent payoff']:.2f}</strong>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    if latest.get("Payout note"):
+        st.info(
+            f"{latest['Payout note']} The outcome chart below still shows the raw EWL measurement."
+        )
 
     st.markdown("### Outcome probabilities across all rounds")
-    st.caption("Each line follows one measured outcome through the full game. Click a legend item to focus on that outcome.")
+    st.caption("Raw EWL measurement probabilities for every round; the custom Q/S payout rule is applied separately. Click a legend item to focus on that outcome.")
     outcomes = ["00", "01", "10", "11"]
     probability_history = pd.DataFrame(
         [
@@ -422,7 +433,7 @@ if st.session_state.game_history:
             filtered_history = filtered_history.sort_values("Your payoff", ascending=False)
         else:
             filtered_history = filtered_history.sort_values("Round", ascending=True)
-        history_display = filtered_history.drop(columns=["Outcome probabilities"]).copy()
+        history_display = filtered_history.drop(columns=["Outcome probabilities", "Payout note"]).copy()
         history_display["Your strategy"] = history_display["Your strategy"].map(STRATEGY_LABELS)
         history_display["Opponent strategy"] = history_display["Opponent strategy"].map(STRATEGY_LABELS)
         st.dataframe(
