@@ -174,38 +174,41 @@ def draw_quantum_circuit(circuit):
     return figure
 
 
-def quantum_round_explanation(round_record: dict) -> tuple[str, pd.DataFrame]:
-    """Explain in everyday terms how a Quantum move affects this round."""
-    prize = round_record["Prize pool"]
-    probability_map = round_record["Outcome probabilities"]
+def game_history_explanation(game_history: list[dict]) -> tuple[str, pd.DataFrame]:
+    """Explain quantum payouts and list outcome chances for every round."""
     rows = []
-    for outcome in ("00", "01", "10", "11"):
-        probability = probability_map.get(outcome, 0.0)
-        if probability <= 1e-12:
-            continue
-        alice_share, bob_share = PAYOFF_MATRIX[outcome]
-        rows.append(
-            {
-                "Possible measured result": OUTCOME_LABELS[outcome],
-                "Chance": probability * 100,
-                "Your award for this result": prize * alice_share,
-                "Opponent award for this result": prize * bob_share,
-            }
-        )
+    for round_record in game_history:
+        prize = round_record["Prize pool"]
+        probability_map = round_record["Outcome probabilities"]
+        for outcome in ("00", "01", "10", "11"):
+            alice_share, bob_share = PAYOFF_MATRIX[outcome]
+            rows.append(
+                {
+                    "Round": round_record["Round"],
+                    "Your move": STRATEGY_LABELS[round_record["Your strategy"]],
+                    "Opponent move": STRATEGY_LABELS[round_record["Opponent strategy"]],
+                    "Possible measured result": OUTCOME_LABELS[outcome],
+                    "Chance": probability_map.get(outcome, 0.0) * 100,
+                    "Your award for this result": prize * alice_share,
+                    "Opponent award for this result": prize * bob_share,
+                }
+            )
 
     explanation = (
         "Quantum is a special move, not another name for Split or Steal. "
         "It changes the qubit's phase while the two players' qubits are linked "
         "by the circuit. After the circuit is undone, the app measures both "
         "qubits. That measurement can lead to different Split / Steal results "
-        "with the chances shown below. The usual game rules are then applied "
+        "with the chances shown for every round below. The usual game rules are applied "
         "to each possible result: Split / Split shares the prize, one Steal "
         "takes it all, and Steal / Steal pays nothing.\n\n"
         "The app uses Qiskit's exact, noise-free Statevector calculation, so it "
         "shows the probability-weighted average winnings rather than picking "
         "one random result. This is why choosing Quantum can pay differently "
         "from choosing Split, even against Steal: Quantum changes the chances "
-        "of the measured results, while the payout rules for each result stay the same."
+        "of the measured results, while the payout rules for each result stay the same. "
+        "The table includes all four possible results for every recorded round; "
+        "a 0% chance means that result did not occur in that round's statevector."
     )
     return explanation, pd.DataFrame(rows)
 
@@ -375,21 +378,20 @@ if st.session_state.game_history:
         """,
         unsafe_allow_html=True,
     )
-    if "Q" in (latest["Your strategy"], latest["Opponent strategy"]):
-        explanation, quantum_outcomes = quantum_round_explanation(latest)
-        with st.container(border=True):
-            st.markdown("### Why did Quantum pay this way?")
-            st.markdown(explanation)
-            st.dataframe(
-                quantum_outcomes,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Chance": st.column_config.NumberColumn(format="%.1f%%"),
-                    "Your award for this result": st.column_config.NumberColumn(format="$%.2f"),
-                    "Opponent award for this result": st.column_config.NumberColumn(format="$%.2f"),
-                },
-            )
+    explanation, game_outcomes = game_history_explanation(st.session_state.game_history)
+    with st.container(border=True):
+        st.markdown("### How Quantum and measured outcomes affect the whole game")
+        st.markdown(explanation)
+        st.dataframe(
+            game_outcomes,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Chance": st.column_config.NumberColumn(format="%.1f%%"),
+                "Your award for this result": st.column_config.NumberColumn(format="$%.2f"),
+                "Opponent award for this result": st.column_config.NumberColumn(format="$%.2f"),
+            },
+        )
 
     st.markdown("### Outcome probabilities across all rounds")
     st.caption("The exact EWL measurement probabilities for every round. The payout table is applied to these results. Click a legend item to focus on that outcome.")
