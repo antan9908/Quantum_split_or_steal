@@ -35,6 +35,9 @@ The displayed bitstrings use Alice–Bob order: `0` means Split and `1` means St
 - Full-session Plotly timeline showing all four outcome probabilities round by round.
 - Matplotlib circuit rendering and Plotly outcome chart.
 - Session scoreboards, leaderboard, sortable/filterable round history, and reset control.
+- A separate **Quantum Maze Solver** tab with three demo mazes, a Qiskit discrete-time quantum walk, reflecting maze walls, probability heat map, single-step controls, auto-run to first Exit arrival, coin-direction chart, state-vector summary, and PNG download.
+
+The maze tab uses a browser-native Streamlit interface so it works in the same local and hosted app. Its four-direction coin uses Hadamard gates, and its reversible conditional shift moves through open cells or reflects from walls. The heat map shows position probabilities, summed over the direction coin. Auto-Run stops at the first step with nonzero Exit probability and reports that quantum-wave arrival alongside the classical shortest-path length; first arrival does not guarantee the walker will be measured at the Exit.
 
 ## Project structure
 
@@ -42,6 +45,7 @@ The displayed bitstrings use Alice–Bob order: `0` means Split and `1` means St
 .
 ├── app.py                 # Streamlit UI and session state
 ├── quantum_engine.py      # EWL circuit, Statevector probabilities, payoffs
+├── quantum_maze.py        # Qiskit discrete-time quantum maze walk and renderer
 ├── requirements.txt       # Runtime dependencies
 ├── .streamlit/config.toml # App theme defaults
 └── .gitignore             # Local environments, caches, and secrets

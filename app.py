@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import random
 import os
+import time
+from io import BytesIO
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", str(Path(__file__).resolve().parent / ".matplotlib"))
@@ -16,6 +18,20 @@ import plotly.express as px
 import streamlit as st
 
 from quantum_engine import PAYOFF_MATRIX, Strategy, build_ewl_circuit, simulate_game
+from quantum_maze import (
+    DEFAULT_DEMO_NAME,
+    DEMO_MAZES,
+    DIRECTIONS,
+    coin_probabilities,
+    create_initial_state,
+    dominant_state_components,
+    draw_maze,
+    maze_points,
+    position_probabilities,
+    run_quantum_step,
+    shortest_maze_path,
+    update_grid,
+)
 
 
 STRATEGY_LABELS = {
@@ -30,6 +46,8 @@ OUTCOME_LABELS = {
     "11": "∣11⟩  Steal / Steal",
 }
 GAME_RULES_VERSION = 4
+EXIT_ARRIVAL_THRESHOLD = 1e-12
+AUTO_RUN_SAFETY_LIMIT = 256
 
 st.set_page_config(
     page_title="Quantum Split or Steal",
@@ -248,249 +266,459 @@ def play_round(
     )
 
 
-initialize_state()
-
-with st.sidebar:
-    st.markdown("## 📖 How to play")
-    st.markdown(
-        """
-        ### Split or Steal
-        Each player secretly chooses **Split** or **Steal**. Let **P** be the
-        prize pool for the round:
-
-        | Your move | Other move | You receive | They receive |
-        |:--|:--|--:|--:|
-        | Split | Split | P / 2 | P / 2 |
-        | Split | Steal | 0 | P |
-        | Steal | Split | P | 0 |
-        | Steal | Steal | 0 | 0 |
-
-        ### Quantum game
-        EWL encodes **Split (S)** as identity, **Steal (T)** as Pauli-X, and
-        **Quantum (Q)** as a phase operation. After entanglement, the players'
-        choices are applied and the qubits are disentangled before measurement.
-        The measured bits map to the four Split / Steal outcomes in the table.
-
-        The circuit measures both players' qubits. Those measured results are
-        interpreted using the same Split / Steal payout rules above. Quantum
-        is a special operation that changes the chances of each result; it is
-        not automatically treated as Split or Steal. The app reports expected
-        winnings from the exact outcome probabilities.
-        """
+def render_quantum_maze_tab() -> None:
+    """Render the interactive Qiskit maze walk inside the Streamlit app."""
+    st.title("Quantum Maze Solver")
+    st.caption(
+        "A discrete-time quantum walk explores a maze as a probability wave. "
+        "Each step uses a Qiskit coin toss followed by a reversible shift that reflects from walls. "
+        "Auto-Run continues until the wave first reaches the Exit."
     )
-    st.divider()
-    st.markdown("### Move key")
-    st.markdown("- **S** — Split\n- **T** — Steal\n- **Q** — Quantum strategy")
-    st.divider()
-    st.button("↻  Reset Game", on_click=reset_game, width="stretch")
 
-st.markdown(
-    """
-    <div class="hero">
-      <h1>Quantum Split or Steal</h1>
-      <p>Share the prize, claim it all, or explore what a quantum move changes.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
+    if "maze_walk_version" not in st.session_state:
+        st.session_state.maze_walk_version = 1
+        st.session_state.maze_demo_name = DEFAULT_DEMO_NAME
+        st.session_state.maze_walk_maze_name = DEFAULT_DEMO_NAME
+        st.session_state.maze_walk_state = create_initial_state(DEMO_MAZES[DEFAULT_DEMO_NAME])
+        st.session_state.maze_walk_step = 0
+        st.session_state.maze_first_arrival_step = None
+        st.session_state.maze_first_arrival_probability = None
+    if "maze_demo_name" not in st.session_state:
+        st.session_state.maze_demo_name = DEFAULT_DEMO_NAME
+    if "maze_walk_maze_name" not in st.session_state:
+        st.session_state.maze_walk_maze_name = st.session_state.maze_demo_name
+    if "maze_first_arrival_step" not in st.session_state:
+        st.session_state.maze_first_arrival_step = None
+    if "maze_first_arrival_probability" not in st.session_state:
+        st.session_state.maze_first_arrival_probability = None
+
+    selected_maze_name = st.selectbox(
+        "Choose a demo maze",
+        options=list(DEMO_MAZES),
+        key="maze_demo_name",
+    )
+    maze_grid = DEMO_MAZES[selected_maze_name]
+    if st.session_state.maze_walk_maze_name != selected_maze_name:
+        st.session_state.maze_walk_state = create_initial_state(maze_grid)
+        st.session_state.maze_walk_step = 0
+        st.session_state.maze_first_arrival_step = None
+        st.session_state.maze_first_arrival_probability = None
+        st.session_state.maze_walk_maze_name = selected_maze_name
+
+    _, exit_point = maze_points(maze_grid)
+    classical_shortest_path = shortest_maze_path(maze_grid)
+    state_key = "maze_walk_state"
+
+    def reset_walk() -> None:
+        st.session_state[state_key] = create_initial_state(maze_grid)
+        st.session_state.maze_walk_step = 0
+        st.session_state.maze_first_arrival_step = None
+        st.session_state.maze_first_arrival_probability = None
+
+    control_columns = st.columns([1, 1, 1.2, 1.3])
+    reset_clicked = control_columns[0].button("↻ Reset", key="maze_reset", width="stretch")
+    single_clicked = control_columns[1].button(
+        "Step once", key="maze_single_step", width="stretch"
+    )
+    auto_clicked = control_columns[2].button(
+        "▶ Auto-Run to Exit", type="primary", key="maze_auto_run", width="stretch"
+    )
+    control_columns[3].caption(
+        f"Classical shortest route: {len(classical_shortest_path) - 1} steps"
+    )
+
+    plot_placeholder = st.empty()
+    progress_placeholder = st.empty()
+    if reset_clicked:
+        reset_walk()
+    elif single_clicked:
+        st.session_state[state_key] = run_quantum_step(
+            st.session_state[state_key], maze_grid
+        )
+        st.session_state.maze_walk_step += 1
+        current_probabilities = position_probabilities(
+            st.session_state[state_key], maze_grid
+        )
+        if (
+            st.session_state.maze_first_arrival_step is None
+            and current_probabilities.get(exit_point, 0.0) > EXIT_ARRIVAL_THRESHOLD
+        ):
+            st.session_state.maze_first_arrival_step = st.session_state.maze_walk_step
+            st.session_state.maze_first_arrival_probability = current_probabilities[exit_point]
+    elif auto_clicked:
+        current_probabilities = position_probabilities(
+            st.session_state[state_key], maze_grid
+        )
+        exit_reached = (
+            current_probabilities.get(exit_point, 0.0) > EXIT_ARRIVAL_THRESHOLD
+        )
+        if exit_reached and st.session_state.maze_first_arrival_step is None:
+            st.session_state.maze_first_arrival_step = st.session_state.maze_walk_step
+            st.session_state.maze_first_arrival_probability = current_probabilities[exit_point]
+        for _ in range(0 if exit_reached else AUTO_RUN_SAFETY_LIMIT):
+            st.session_state[state_key] = run_quantum_step(
+                st.session_state[state_key], maze_grid
+            )
+            st.session_state.maze_walk_step += 1
+            current_probabilities = position_probabilities(
+                st.session_state[state_key], maze_grid
+            )
+            figure = update_grid(current_probabilities, maze_grid)
+            plot_placeholder.pyplot(figure, clear_figure=True, width="stretch")
+            plt.close(figure)
+            progress_placeholder.caption(
+                f"Quantum walk advancing: step {st.session_state.maze_walk_step}"
+            )
+            if current_probabilities.get(exit_point, 0.0) > EXIT_ARRIVAL_THRESHOLD:
+                if st.session_state.maze_first_arrival_step is None:
+                    st.session_state.maze_first_arrival_step = st.session_state.maze_walk_step
+                    st.session_state.maze_first_arrival_probability = current_probabilities[exit_point]
+                exit_reached = True
+                break
+            time.sleep(0.1)
+        if not exit_reached:
+            st.warning(
+                f"The wave did not reach the Exit within {AUTO_RUN_SAFETY_LIMIT} additional steps. "
+                "Auto-Run stopped to keep the app responsive; click it again to continue."
+            )
+        else:
+            progress_placeholder.success(
+                f"Exit reached by the quantum wave at step {st.session_state.maze_walk_step}."
+            )
+
+    state_vector = st.session_state[state_key]
+    probabilities = position_probabilities(state_vector, maze_grid)
+    figure = draw_maze(maze_grid, probabilities)
+    plot_placeholder.pyplot(figure, clear_figure=True, width="stretch")
+    image_file = BytesIO()
+    figure.savefig(image_file, format="png", facecolor=figure.get_facecolor(), dpi=180)
+    plt.close(figure)
+    image_file.seek(0)
+    st.download_button(
+        "Download current maze image",
+        data=image_file.getvalue(),
+        file_name=(
+            f"quantum-maze-{selected_maze_name.lower().replace(' ', '-')}-"
+            f"step-{st.session_state.maze_walk_step}.png"
+        ),
+        mime="image/png",
+        key="maze_download_image",
+    )
+
+    info_column, coin_column = st.columns([1, 1.2])
+    with info_column:
+        st.metric("Walk step", st.session_state.maze_walk_step)
+        exit_probability = probabilities.get(exit_point, 0.0)
+        exit_probability_display = (
+            f"{exit_probability:.6%}" if 0 < exit_probability < 0.001
+            else f"{exit_probability:.1%}"
+        )
+        st.metric("Probability at exit", exit_probability_display)
+        st.metric("Classical shortest route", f"{len(classical_shortest_path) - 1} steps")
+        if st.session_state.maze_first_arrival_step is None:
+            st.caption("Quantum wave first arrival: not reached yet")
+        else:
+            first_arrival_probability = st.session_state.maze_first_arrival_probability
+            if first_arrival_probability is None:
+                first_arrival_display = "unknown"
+            elif first_arrival_probability < 0.001:
+                first_arrival_display = f"{first_arrival_probability:.6%}"
+            else:
+                first_arrival_display = f"{first_arrival_probability:.1%}"
+            st.success(
+                f"Quantum wave first reached the Exit at step "
+                f"{st.session_state.maze_first_arrival_step} "
+                f"(Exit probability then: {first_arrival_display})."
+            )
+        st.caption(
+            "The classical shortest route is the fewest adjacent moves from S to E. "
+            "Quantum first arrival means the Exit has nonzero probability; a measurement "
+            "is not guaranteed to find the walker there."
+        )
+        peak_cell = max(probabilities, key=probabilities.get)
+        st.caption(
+            f"Most likely cell: row {peak_cell[0] + 1}, column {peak_cell[1] + 1} "
+            f"({probabilities[peak_cell]:.1%})"
+        )
+    with coin_column:
+        st.markdown("#### Direction coin")
+        st.caption("The four bars show the chance of each movement direction.")
+        coin_frame = pd.DataFrame.from_dict(
+            coin_probabilities(state_vector, maze_grid),
+            orient="index",
+            columns=["Probability"],
+        ).reindex(DIRECTIONS)
+        st.bar_chart(coin_frame, y="Probability", height=190)
+
+    with st.expander("What is the quantum state right now?"):
+        st.markdown(
+            "The state vector stores an amplitude for each **position + direction**. "
+            "Amplitudes can reinforce or cancel each other; their squared magnitudes "
+            "give the probabilities shown on the maze. Here are the largest components:"
+        )
+        components = dominant_state_components(state_vector, maze_grid)
+        for row, column, direction, amplitude in components:
+            st.code(
+                f"row {row + 1}, column {column + 1}, {direction}: "
+                f"{amplitude.real:+.3f}{amplitude.imag:+.3f}i  "
+                f"(probability {abs(amplitude) ** 2:.1%})"
+            )
+
+
+selected_app_section = st.segmented_control(
+    "Choose app section",
+    options=["💰 Split or Steal", "🌀 Quantum Maze Solver"],
+    default="💰 Split or Steal",
+    label_visibility="collapsed",
+    key="app_section",
 )
 
-current_mode = st.session_state.get("opponent_mode_choice", "AI Opponent")
-score_col, opponent_score_col, rounds_col = st.columns(3)
-score_col.metric("Your cumulative winnings", f"${st.session_state.player_score:.2f}")
-if current_mode == "AI Opponent":
-    opponent_score_col.metric("AI cumulative winnings", f"${st.session_state.ai_score:.2f}")
-else:
-    opponent_score_col.metric("Opponent cumulative winnings", f"${st.session_state.opponent_score:.2f}")
-rounds_col.metric("Rounds played", st.session_state.rounds_played)
+if selected_app_section == "💰 Split or Steal":
+    initialize_state()
 
-st.markdown("## Set up your round")
-player_col, mode_col, opponent_col, prize_col = st.columns([1, 1.15, 1, 0.9])
-with player_col:
-    player_choice = st.selectbox(
-        "Your move",
-        options=["S", "T", "Q"],
-        format_func=lambda choice: STRATEGY_LABELS[choice],
-        key="player_strategy_choice",
-    )
-with mode_col:
-    opponent_mode = st.radio(
-        "Opponent",
-        options=["Manual strategy", "AI Opponent"],
-        horizontal=True,
-        key="opponent_mode_choice",
-    )
-with opponent_col:
-    if opponent_mode == "Manual strategy":
-        opponent_choice = st.selectbox(
-            "Manual opponent move",
-            options=["S", "T", "Q"],
-            format_func=lambda choice: STRATEGY_LABELS[choice],
-            key="opponent_strategy_choice",
+    with st.sidebar:
+        st.markdown("## 📖 How to play")
+        st.markdown(
+            """
+            ### Split or Steal
+            Each player secretly chooses **Split** or **Steal**. Let **P** be the
+            prize pool for the round:
+
+            | Your move | Other move | You receive | They receive |
+            |:--|:--|--:|--:|
+            | Split | Split | P / 2 | P / 2 |
+            | Split | Steal | 0 | P |
+            | Steal | Split | P | 0 |
+            | Steal | Steal | 0 | 0 |
+
+            ### Quantum game
+            EWL encodes **Split (S)** as identity, **Steal (T)** as Pauli-X, and
+            **Quantum (Q)** as a phase operation. After entanglement, the players'
+            choices are applied and the qubits are disentangled before measurement.
+            The measured bits map to the four Split / Steal outcomes in the table.
+
+            The circuit measures both players' qubits. Those measured results are
+            interpreted using the same Split / Steal payout rules above. Quantum
+            is a special operation that changes the chances of each result; it is
+            not automatically treated as Split or Steal. The app reports expected
+            winnings from the exact outcome probabilities.
+            """
         )
-    else:
-        opponent_choice = "S"
-        st.markdown("**AI move**\n\nRandomly chooses Split, Steal, or Quantum each round.")
-with prize_col:
-    prize_pool = st.slider("Prize pool ($)", min_value=10, max_value=1000, value=100, step=10)
+        st.divider()
+        st.markdown("### Move key")
+        st.markdown("- **S** — Split\n- **T** — Steal\n- **Q** — Quantum strategy")
+        st.divider()
+        st.button("↻  Reset Game", on_click=reset_game, width="stretch")
 
-if st.button("▶  Play Round", type="primary", width="stretch"):
-    play_round(player_choice, opponent_mode, opponent_choice, float(prize_pool))
-    st.rerun()
-
-with st.expander("🧠 Theory & Math — the EWL protocol", expanded=False):
     st.markdown(
-        "The Eisert–Wilkens–Lewenstein protocol maps each player's strategy to a "
-        "unitary operation on one qubit. It entangles the initial state, applies "
-        "the two strategies, then reverses the entanglement before measuring."
-    )
-    st.latex(r"J(\gamma)=\exp\!\left(i\frac{\gamma}{2}X\otimes X\right),\qquad \gamma=\frac{\pi}{2}")
-    st.latex(r"|\psi_f\rangle=J^\dagger(U_A\otimes U_B)J|00\rangle")
-    st.latex(r"p_{ab}=|\langle ab|\psi_f\rangle|^2,\qquad \mathbb{E}[u_A]=\sum_{a,b}p_{ab}u_A(ab)")
-    st.markdown(
-        "For this version, **S (Split) = I**, **T (Steal) = X**, and "
-        "**Q = diag(i, −i)**. The measured outcome uses the game's same payout rules: "
-        r"\(P\): \(u(00)=(P/2,P/2)\), \(u(01)=(0,P)\), "
-        r"\(u(10)=(P,0)\), and \(u(11)=(0,0)\)."
-    )
-    st.markdown(
-        "A Quantum move is not a promise to Split. It changes the quantum state "
-        "and therefore the probability of each measured Split / Steal result. "
-        "The app applies the ordinary payout table to those results and displays "
-        "the expected winnings. Quantum can therefore lead to a different "
-        "expected payout than the classical move Split, without changing the "
-        "fundamental payout rules."
-    )
-
-if st.session_state.game_history:
-    latest = st.session_state.game_history[-1]
-    winnings_label = "expected winnings"
-    st.markdown("## Latest round")
-    st.markdown(
-        f"""
-        <div class="round-card">
-          <strong>Round {latest['Round']}</strong><br>
-          You played <strong>{STRATEGY_LABELS[latest['Your strategy']]}</strong><br>
-          {latest.get('Opponent mode', 'Opponent')} played <strong>{STRATEGY_LABELS[latest['Opponent strategy']]}</strong><br><br>
-          Prize pool: <strong>${latest['Prize pool']:.2f}</strong><br>
-          Your {winnings_label}: <strong>${latest['Your payoff']:.2f}</strong><br>
-          Opponent {winnings_label}: <strong>${latest['Opponent payoff']:.2f}</strong>
+        """
+        <div class="hero">
+          <h1>Quantum Split or Steal</h1>
+          <p>Share the prize, claim it all, or explore what a quantum move changes.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    explanation, game_outcomes = game_history_explanation(st.session_state.game_history)
-    with st.container(border=True):
-        st.markdown("### How Quantum and measured outcomes affect the whole game")
-        st.markdown(explanation)
-        st.dataframe(
-            game_outcomes,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Chance": st.column_config.NumberColumn(format="%.1f%%"),
-                "Your award for this result": st.column_config.NumberColumn(format="$%.2f"),
-                "Opponent award for this result": st.column_config.NumberColumn(format="$%.2f"),
-            },
+
+    current_mode = st.session_state.get("opponent_mode_choice", "AI Opponent")
+    score_col, opponent_score_col, rounds_col = st.columns(3)
+    score_col.metric("Your cumulative winnings", f"${st.session_state.player_score:.2f}")
+    if current_mode == "AI Opponent":
+        opponent_score_col.metric("AI cumulative winnings", f"${st.session_state.ai_score:.2f}")
+    else:
+        opponent_score_col.metric("Opponent cumulative winnings", f"${st.session_state.opponent_score:.2f}")
+    rounds_col.metric("Rounds played", st.session_state.rounds_played)
+
+    st.markdown("## Set up your round")
+    player_col, mode_col, opponent_col, prize_col = st.columns([1, 1.15, 1, 0.9])
+    with player_col:
+        player_choice = st.selectbox(
+            "Your move",
+            options=["S", "T", "Q"],
+            format_func=lambda choice: STRATEGY_LABELS[choice],
+            key="player_strategy_choice",
         )
-
-    st.markdown("### Outcome probabilities across all rounds")
-    st.caption("The exact EWL measurement probabilities for every round. The payout table is applied to these results. Click a legend item to focus on that outcome.")
-    outcomes = ["00", "01", "10", "11"]
-    probability_history = pd.DataFrame(
-        [
-            {
-                "Round": round_record["Round"],
-                "Final outcome": OUTCOME_LABELS[outcome],
-                "Probability": round_record["Outcome probabilities"].get(outcome, 0.0),
-            }
-            for round_record in st.session_state.game_history
-            for outcome in outcomes
-        ]
-    )
-    history_figure = px.line(
-        probability_history,
-        x="Round",
-        y="Probability",
-        color="Final outcome",
-        markers=True,
-        color_discrete_sequence=px.colors.qualitative.Prism,
-        hover_data={"Probability": ":.1%"},
-    )
-    history_figure.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#cbd5e1",
-        margin=dict(l=10, r=10, t=15, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        xaxis=dict(title="Round", dtick=1),
-        yaxis=dict(range=[0, 1], tickformat=".0%", title="Probability"),
-    )
-    st.plotly_chart(history_figure, width="stretch")
-
-    st.markdown("### Quantum circuit")
-    circuit = build_ewl_circuit(latest["Your strategy"], latest["Opponent strategy"])
-    circuit_figure = draw_quantum_circuit(circuit)
-    try:
-        st.pyplot(circuit_figure, clear_figure=True, width="stretch")
-    finally:
-        plt.close(circuit_figure)
-
-    leaderboard_tab, history_tab = st.tabs(["🏆 Leaderboard", "🧾 Round history"])
-    with leaderboard_tab:
-        st.markdown("### Cumulative standings")
-        standings = pd.DataFrame(
-            [
-                {"Player": "You", "Cumulative payoff": st.session_state.player_score},
-                {"Player": "AI opponent", "Cumulative payoff": st.session_state.ai_score},
-                {"Player": "Manual opponents", "Cumulative payoff": st.session_state.opponent_score},
-            ]
-        ).sort_values("Cumulative payoff", ascending=False, ignore_index=True)
-        standings.insert(0, "Rank", range(1, len(standings) + 1))
-        st.dataframe(
-            standings,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Cumulative payoff": st.column_config.NumberColumn(format="$%.2f"),
-            },
+    with mode_col:
+        opponent_mode = st.radio(
+            "Opponent",
+            options=["Manual strategy", "AI Opponent"],
+            horizontal=True,
+            key="opponent_mode_choice",
         )
-    with history_tab:
-        st.markdown("### Round-by-round history")
-        history_frame = pd.DataFrame(st.session_state.game_history)
-        filter_col, sort_col = st.columns([1, 1])
-        with filter_col:
-            selected_moves = st.multiselect(
-                "Filter by your move",
+    with opponent_col:
+        if opponent_mode == "Manual strategy":
+            opponent_choice = st.selectbox(
+                "Manual opponent move",
                 options=["S", "T", "Q"],
-                format_func=lambda move: STRATEGY_LABELS[move],
-                key="history_move_filter",
+                format_func=lambda choice: STRATEGY_LABELS[choice],
+                key="opponent_strategy_choice",
             )
-        with sort_col:
-            history_order = st.selectbox(
-                "Sort rounds",
-                options=["Newest first", "Oldest first", "Highest player payoff"],
-                key="history_order",
-            )
-        filtered_history = history_frame[history_frame["Your strategy"].isin(selected_moves)]
-        if history_order == "Newest first":
-            filtered_history = filtered_history.sort_values("Round", ascending=False)
-        elif history_order == "Highest player payoff":
-            filtered_history = filtered_history.sort_values("Your payoff", ascending=False)
         else:
-            filtered_history = filtered_history.sort_values("Round", ascending=True)
-        history_display = filtered_history.drop(columns=["Outcome probabilities"]).copy()
-        history_display["Your strategy"] = history_display["Your strategy"].map(STRATEGY_LABELS)
-        history_display["Opponent strategy"] = history_display["Opponent strategy"].map(STRATEGY_LABELS)
-        st.dataframe(
-            history_display,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Prize pool": st.column_config.NumberColumn(format="$%.2f"),
-                "Your payoff": st.column_config.NumberColumn(format="$%.2f"),
-                "Opponent payoff": st.column_config.NumberColumn(format="$%.2f"),
-            },
+            opponent_choice = "S"
+            st.markdown("**AI move**\n\nRandomly chooses Split, Steal, or Quantum each round.")
+    with prize_col:
+        prize_pool = st.slider("Prize pool ($)", min_value=10, max_value=1000, value=100, step=10)
+
+    if st.button("▶  Play Round", type="primary", width="stretch"):
+        play_round(player_choice, opponent_mode, opponent_choice, float(prize_pool))
+        st.rerun()
+
+    with st.expander("🧠 Theory & Math — the EWL protocol", expanded=False):
+        st.markdown(
+            "The Eisert–Wilkens–Lewenstein protocol maps each player's strategy to a "
+            "unitary operation on one qubit. It entangles the initial state, applies "
+            "the two strategies, then reverses the entanglement before measuring."
         )
+        st.latex(r"J(\gamma)=\exp\!\left(i\frac{\gamma}{2}X\otimes X\right),\qquad \gamma=\frac{\pi}{2}")
+        st.latex(r"|\psi_f\rangle=J^\dagger(U_A\otimes U_B)J|00\rangle")
+        st.latex(r"p_{ab}=|\langle ab|\psi_f\rangle|^2,\qquad \mathbb{E}[u_A]=\sum_{a,b}p_{ab}u_A(ab)")
+        st.markdown(
+            "For this version, **S (Split) = I**, **T (Steal) = X**, and "
+            "**Q = diag(i, −i)**. The measured outcome uses the game's same payout rules: "
+            r"\(P\): \(u(00)=(P/2,P/2)\), \(u(01)=(0,P)\), "
+            r"\(u(10)=(P,0)\), and \(u(11)=(0,0)\)."
+        )
+        st.markdown(
+            "A Quantum move is not a promise to Split. It changes the quantum state "
+            "and therefore the probability of each measured Split / Steal result. "
+            "The app applies the ordinary payout table to those results and displays "
+            "the expected winnings. Quantum can therefore lead to a different "
+            "expected payout than the classical move Split, without changing the "
+            "fundamental payout rules."
+        )
+
+    if st.session_state.game_history:
+        latest = st.session_state.game_history[-1]
+        winnings_label = "expected winnings"
+        st.markdown("## Latest round")
+        st.markdown(
+            f"""
+            <div class="round-card">
+              <strong>Round {latest['Round']}</strong><br>
+              You played <strong>{STRATEGY_LABELS[latest['Your strategy']]}</strong><br>
+              {latest.get('Opponent mode', 'Opponent')} played <strong>{STRATEGY_LABELS[latest['Opponent strategy']]}</strong><br><br>
+              Prize pool: <strong>${latest['Prize pool']:.2f}</strong><br>
+              Your {winnings_label}: <strong>${latest['Your payoff']:.2f}</strong><br>
+              Opponent {winnings_label}: <strong>${latest['Opponent payoff']:.2f}</strong>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        explanation, game_outcomes = game_history_explanation(st.session_state.game_history)
+        with st.container(border=True):
+            st.markdown("### How Quantum and measured outcomes affect the whole game")
+            st.markdown(explanation)
+            st.dataframe(
+                game_outcomes,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Chance": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Your award for this result": st.column_config.NumberColumn(format="$%.2f"),
+                    "Opponent award for this result": st.column_config.NumberColumn(format="$%.2f"),
+                },
+            )
+
+        st.markdown("### Outcome probabilities across all rounds")
+        st.caption("The exact EWL measurement probabilities for every round. The payout table is applied to these results. Click a legend item to focus on that outcome.")
+        outcomes = ["00", "01", "10", "11"]
+        probability_history = pd.DataFrame(
+            [
+                {
+                    "Round": round_record["Round"],
+                    "Final outcome": OUTCOME_LABELS[outcome],
+                    "Probability": round_record["Outcome probabilities"].get(outcome, 0.0),
+                }
+                for round_record in st.session_state.game_history
+                for outcome in outcomes
+            ]
+        )
+        history_figure = px.line(
+            probability_history,
+            x="Round",
+            y="Probability",
+            color="Final outcome",
+            markers=True,
+            color_discrete_sequence=px.colors.qualitative.Prism,
+            hover_data={"Probability": ":.1%"},
+        )
+        history_figure.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#cbd5e1",
+            margin=dict(l=10, r=10, t=15, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            xaxis=dict(title="Round", dtick=1),
+            yaxis=dict(range=[0, 1], tickformat=".0%", title="Probability"),
+        )
+        st.plotly_chart(history_figure, width="stretch")
+
+        st.markdown("### Quantum circuit")
+        circuit = build_ewl_circuit(latest["Your strategy"], latest["Opponent strategy"])
+        circuit_figure = draw_quantum_circuit(circuit)
+        try:
+            st.pyplot(circuit_figure, clear_figure=True, width="stretch")
+        finally:
+            plt.close(circuit_figure)
+
+        leaderboard_tab, history_tab = st.tabs(["🏆 Leaderboard", "🧾 Round history"])
+        with leaderboard_tab:
+            st.markdown("### Cumulative standings")
+            standings = pd.DataFrame(
+                [
+                    {"Player": "You", "Cumulative payoff": st.session_state.player_score},
+                    {"Player": "AI opponent", "Cumulative payoff": st.session_state.ai_score},
+                    {"Player": "Manual opponents", "Cumulative payoff": st.session_state.opponent_score},
+                ]
+            ).sort_values("Cumulative payoff", ascending=False, ignore_index=True)
+            standings.insert(0, "Rank", range(1, len(standings) + 1))
+            st.dataframe(
+                standings,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Cumulative payoff": st.column_config.NumberColumn(format="$%.2f"),
+                },
+            )
+        with history_tab:
+            st.markdown("### Round-by-round history")
+            history_frame = pd.DataFrame(st.session_state.game_history)
+            filter_col, sort_col = st.columns([1, 1])
+            with filter_col:
+                selected_moves = st.multiselect(
+                    "Filter by your move",
+                    options=["S", "T", "Q"],
+                    format_func=lambda move: STRATEGY_LABELS[move],
+                    key="history_move_filter",
+                )
+            with sort_col:
+                history_order = st.selectbox(
+                    "Sort rounds",
+                    options=["Newest first", "Oldest first", "Highest player payoff"],
+                    key="history_order",
+                )
+            filtered_history = history_frame[history_frame["Your strategy"].isin(selected_moves)]
+            if history_order == "Newest first":
+                filtered_history = filtered_history.sort_values("Round", ascending=False)
+            elif history_order == "Highest player payoff":
+                filtered_history = filtered_history.sort_values("Your payoff", ascending=False)
+            else:
+                filtered_history = filtered_history.sort_values("Round", ascending=True)
+            history_display = filtered_history.drop(columns=["Outcome probabilities"]).copy()
+            history_display["Your strategy"] = history_display["Your strategy"].map(STRATEGY_LABELS)
+            history_display["Opponent strategy"] = history_display["Opponent strategy"].map(STRATEGY_LABELS)
+            st.dataframe(
+                history_display,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Prize pool": st.column_config.NumberColumn(format="$%.2f"),
+                    "Your payoff": st.column_config.NumberColumn(format="$%.2f"),
+                    "Opponent payoff": st.column_config.NumberColumn(format="$%.2f"),
+                },
+            )
+    else:
+        st.caption("Play your first round to see the measured outcome probabilities and game history.")
 else:
-    st.caption("Play your first round to see the measured outcome probabilities and game history.")
+    render_quantum_maze_tab()
