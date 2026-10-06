@@ -15,7 +15,7 @@ Choose a prize pool for each round. The classical Split or Steal payoff is:
 | Steal | Split | Full prize | $0 |
 | Steal | Steal | $0 | $0 |
 
-The quantum option applies an EWL phase operation. The app calculates exact, noise-free probabilities using Qiskit's `Statevector`, then calculates payouts from the selected prize pool. This project also has a custom rule: when one player chooses **Quantum (Q)** and the other chooses **Split (S)**, each receives half the prize, regardless of the measured outcome. This applies in either player order.
+The quantum option applies an EWL phase operation. The app calculates exact, noise-free probabilities using Qiskit's `Statevector`, then applies the same Split or Steal payout table to each possible measured outcome. Displayed winnings are the probability-weighted expected payout for the selected prize pool.
 
 ## Strategies and quantum model
 
@@ -24,16 +24,14 @@ The quantum option applies an EWL phase operation. The app calculates exact, noi
 - **Quantum (Q):** `diag(i, -i)`.
 - **Entangler:** `J = exp(i π/4 · X⊗X) = (I⊗I + iX⊗X)/√2`; the circuit applies `J†` before measurement.
 
-The displayed bitstrings use Alice–Bob order: `0` means Split and `1` means Steal. Qubit 0 is Alice and qubit 1 is Bob. Outcome charts always show the raw EWL measurement probabilities. The Q/S custom payout is applied separately, so its awarded split can differ from the bitstring shown by the circuit.
-
-The custom Q/S payout is a game-design rule, not a consequence of the EWL protocol. Strategy optimality and equilibrium claims depend on the full payout rules; this app does not assert that Q is universally optimal.
+The displayed bitstrings use Alice–Bob order: `0` means Split and `1` means Steal. Qubit 0 is Alice and qubit 1 is Bob. **Quantum is a separate operation, not another name for Split or Steal.** It changes the chance of each measured outcome, while the same payout table is applied to the measurement results. The app includes a plain-language explanation and outcome-by-outcome payout breakdown for rounds involving Quantum.
 
 ## Features
 
 - Dark, neon-styled Streamlit interface.
 - Random AI opponent or manually selected opponent move.
 - Adjustable prize pool.
-- Exact outcome probabilities, expected winnings, and the custom Q/S payout rule.
+- Exact outcome probabilities and expected winnings under the game's Split or Steal payout table.
 - Full-session Plotly timeline showing all four outcome probabilities round by round.
 - Matplotlib circuit rendering and Plotly outcome chart.
 - Session scoreboards, leaderboard, sortable/filterable round history, and reset control.

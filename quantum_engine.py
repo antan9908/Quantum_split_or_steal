@@ -31,19 +31,6 @@ PAYOFF_MATRIX: dict[str, tuple[float, float]] = {
     "11": (0.0, 0.0),  # Steal, Steal: nobody receives the prize
 }
 
-# This project's requested house rule is applied after the EWL measurement:
-# when exactly one player chooses Q and the other chooses Split, they split P.
-# These are prize shares in AliceBob order.
-CUSTOM_STRATEGY_PAYOUTS: dict[tuple[Strategy, Strategy], tuple[float, float]] = {
-    ("Q", "S"): (0.5, 0.5),
-    ("S", "Q"): (0.5, 0.5),
-}
-CUSTOM_PAYOUT_NOTE = (
-    "Custom Quantum–Split payout: each player receives half the prize, "
-    "regardless of the measured outcome."
-)
-
-
 def _strategy_gate(strategy: Strategy) -> Gate:
     """Return the single-qubit gate for Split, Steal, or Quantum."""
     if strategy == "S":
@@ -134,27 +121,10 @@ def simulate_game(
     payoff_matrix: dict[str, tuple[float, float]] | None = None,
     prize_amount: float = 1.0,
 ) -> dict[str, object]:
-    """Return the circuit, exact outcome probabilities, and expected payoffs.
-
-    Q-versus-S (in either order) uses the project's custom half-each payout;
-    all other strategy pairs use the usual measured-outcome payoff matrix.
-    """
+    """Return the circuit, exact outcome probabilities, and expected payoffs."""
     probabilities = outcome_probabilities(alice_strategy, bob_strategy)
-    custom_shares = CUSTOM_STRATEGY_PAYOUTS.get((alice_strategy, bob_strategy))
-    if custom_shares is None:
-        payouts = expected_payoffs(probabilities, payoff_matrix, prize_amount)
-        payout_rule = "Measured outcome"
-        payout_note = None
-    else:
-        if prize_amount < 0:
-            raise ValueError("prize_amount must be non-negative.")
-        payouts = (prize_amount * custom_shares[0], prize_amount * custom_shares[1])
-        payout_rule = "Custom Q/S split"
-        payout_note = CUSTOM_PAYOUT_NOTE
     return {
         "circuit": build_ewl_circuit(alice_strategy, bob_strategy),
         "probabilities": probabilities,
-        "expected_payoffs": payouts,
-        "payout_rule": payout_rule,
-        "payout_note": payout_note,
+        "expected_payoffs": expected_payoffs(probabilities, payoff_matrix, prize_amount),
     }

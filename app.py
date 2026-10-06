@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from quantum_engine import Strategy, build_ewl_circuit, simulate_game
+from quantum_engine import PAYOFF_MATRIX, Strategy, build_ewl_circuit, simulate_game
 
 
 STRATEGY_LABELS = {
@@ -29,7 +29,7 @@ OUTCOME_LABELS = {
     "10": "∣10⟩  Steal / Split",
     "11": "∣11⟩  Steal / Steal",
 }
-GAME_RULES_VERSION = 3
+GAME_RULES_VERSION = 4
 
 st.set_page_config(
     page_title="Quantum Split or Steal",
@@ -174,6 +174,42 @@ def draw_quantum_circuit(circuit):
     return figure
 
 
+def quantum_round_explanation(round_record: dict) -> tuple[str, pd.DataFrame]:
+    """Explain in everyday terms how a Quantum move affects this round."""
+    prize = round_record["Prize pool"]
+    probability_map = round_record["Outcome probabilities"]
+    rows = []
+    for outcome in ("00", "01", "10", "11"):
+        probability = probability_map.get(outcome, 0.0)
+        if probability <= 1e-12:
+            continue
+        alice_share, bob_share = PAYOFF_MATRIX[outcome]
+        rows.append(
+            {
+                "Possible measured result": OUTCOME_LABELS[outcome],
+                "Chance": probability * 100,
+                "Your award for this result": prize * alice_share,
+                "Opponent award for this result": prize * bob_share,
+            }
+        )
+
+    explanation = (
+        "Quantum is a special move, not another name for Split or Steal. "
+        "It changes the qubit's phase while the two players' qubits are linked "
+        "by the circuit. After the circuit is undone, the app measures both "
+        "qubits. That measurement can lead to different Split / Steal results "
+        "with the chances shown below. The usual game rules are then applied "
+        "to each possible result: Split / Split shares the prize, one Steal "
+        "takes it all, and Steal / Steal pays nothing.\n\n"
+        "The app uses Qiskit's exact, noise-free Statevector calculation, so it "
+        "shows the probability-weighted average winnings rather than picking "
+        "one random result. This is why choosing Quantum can pay differently "
+        "from choosing Split, even against Steal: Quantum changes the chances "
+        "of the measured results, while the payout rules for each result stay the same."
+    )
+    return explanation, pd.DataFrame(rows)
+
+
 def play_round(
     player_strategy: Strategy,
     opponent_mode: str,
@@ -204,8 +240,6 @@ def play_round(
             "Opponent strategy": opponent_strategy,
             "Your payoff": player_payoff,
             "Opponent payoff": opponent_payoff,
-            "Payout rule": result["payout_rule"],
-            "Payout note": result["payout_note"],
             "Outcome probabilities": all_outcomes,
         }
     )
@@ -234,11 +268,11 @@ with st.sidebar:
         choices are applied and the qubits are disentangled before measurement.
         The measured bits map to the four Split / Steal outcomes in the table.
 
-        Normally, payoffs follow the exact, noise-free measured outcomes and
-        the selected prize pool. **Custom Quantum–Split rule:** if one player
-        chooses Q and the other chooses S, each receives half the prize,
-        regardless of the measured bitstring. The probability chart continues
-        to show the raw EWL measurement.
+        The circuit measures both players' qubits. Those measured results are
+        interpreted using the same Split / Steal payout rules above. Quantum
+        is a special operation that changes the chances of each result; it is
+        not automatically treated as Split or Steal. The app reports expected
+        winnings from the exact outcome probabilities.
         """
     )
     st.divider()
@@ -311,23 +345,22 @@ with st.expander("🧠 Theory & Math — the EWL protocol", expanded=False):
     st.latex(r"p_{ab}=|\langle ab|\psi_f\rangle|^2,\qquad \mathbb{E}[u_A]=\sum_{a,b}p_{ab}u_A(ab)")
     st.markdown(
         "For this version, **S (Split) = I**, **T (Steal) = X**, and "
-        "**Q = diag(i, −i)**. The standard outcome payoff matrix is a share of the pool "
+        "**Q = diag(i, −i)**. The measured outcome uses the game's same payout rules: "
         r"\(P\): \(u(00)=(P/2,P/2)\), \(u(01)=(0,P)\), "
         r"\(u(10)=(P,0)\), and \(u(11)=(0,0)\)."
     )
     st.markdown(
-        "**Custom payout rule:** when the strategies are Q/S or S/Q, each player "
-        r"receives \(P/2\), regardless of the measured bitstring. This house rule "
-        "changes the payout calculation only; it does not alter the EWL circuit "
-        "or its outcome probabilities. The rule is a game-design choice rather "
-        "than a consequence of the quantum protocol, so this app does not claim "
-        "that Q is universally optimal or that the custom game has a particular "
-        "Nash equilibrium."
+        "A Quantum move is not a promise to Split. It changes the quantum state "
+        "and therefore the probability of each measured Split / Steal result. "
+        "The app applies the ordinary payout table to those results and displays "
+        "the expected winnings. Quantum can therefore lead to a different "
+        "expected payout than the classical move Split, without changing the "
+        "fundamental payout rules."
     )
 
 if st.session_state.game_history:
     latest = st.session_state.game_history[-1]
-    winnings_label = "winnings" if latest.get("Payout note") else "expected winnings"
+    winnings_label = "expected winnings"
     st.markdown("## Latest round")
     st.markdown(
         f"""
@@ -342,13 +375,24 @@ if st.session_state.game_history:
         """,
         unsafe_allow_html=True,
     )
-    if latest.get("Payout note"):
-        st.info(
-            f"{latest['Payout note']} The outcome chart below still shows the raw EWL measurement."
-        )
+    if "Q" in (latest["Your strategy"], latest["Opponent strategy"]):
+        explanation, quantum_outcomes = quantum_round_explanation(latest)
+        with st.container(border=True):
+            st.markdown("### Why did Quantum pay this way?")
+            st.markdown(explanation)
+            st.dataframe(
+                quantum_outcomes,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Chance": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Your award for this result": st.column_config.NumberColumn(format="$%.2f"),
+                    "Opponent award for this result": st.column_config.NumberColumn(format="$%.2f"),
+                },
+            )
 
     st.markdown("### Outcome probabilities across all rounds")
-    st.caption("Raw EWL measurement probabilities for every round; the custom Q/S payout rule is applied separately. Click a legend item to focus on that outcome.")
+    st.caption("The exact EWL measurement probabilities for every round. The payout table is applied to these results. Click a legend item to focus on that outcome.")
     outcomes = ["00", "01", "10", "11"]
     probability_history = pd.DataFrame(
         [
@@ -433,7 +477,7 @@ if st.session_state.game_history:
             filtered_history = filtered_history.sort_values("Your payoff", ascending=False)
         else:
             filtered_history = filtered_history.sort_values("Round", ascending=True)
-        history_display = filtered_history.drop(columns=["Outcome probabilities", "Payout note"]).copy()
+        history_display = filtered_history.drop(columns=["Outcome probabilities"]).copy()
         history_display["Your strategy"] = history_display["Your strategy"].map(STRATEGY_LABELS)
         history_display["Opponent strategy"] = history_display["Opponent strategy"].map(STRATEGY_LABELS)
         st.dataframe(
