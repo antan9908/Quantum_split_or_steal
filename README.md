@@ -1,5 +1,7 @@
 # Quantum Split or Steal
+## Live Demo
 
+[Play Quantum Split or Steal](https://quantumsplitorsteal-92swqsx6hmenzt9wdt8s4f.streamlit.app/)
 An interactive **Eisert–Wilkens–Lewenstein (EWL) quantum game** built with Qiskit and Streamlit. Choose **Split**, **Steal**, or **Quantum**, play against a random AI or a manually selected opponent, and see the exact outcome probabilities, circuit, and winnings for each round.
 
 ## Game rules
